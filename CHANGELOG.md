@@ -1,9 +1,433 @@
 Ansible Changes By Release
 ==========================
 
-## 1.5 "Love Walks In" - Release pending!
+## 1.9 "Dancing In the Street" - ACTIVE DEVELOPMENT
+
+in progress, details pending
+
+* Add a clone parameter to git module that allows you to get information about a remote repo even if it doesn't exist locally.
+* Safety changes: several modules have force parameters that defaulted to true.
+  These have been changed to default to false so as not to accidentally lose
+  work.  Playbooks that depended on the former behaviour simply to add
+  force=True to the task that needs it.  Affected modules:
+
+  * bzr: When local modifications exist in a checkout, the bzr module used to
+    default to temoving the modifications on any operation.  Now the module
+    will not remove the modifications unless force=yes is specified.
+    Operations that depend on a clean working tree may fail unless force=yes is
+    added.
+  * git: When local modifications exist in a checkout, the git module will now
+    fail unless force is explictly specified.  Specifying force will allow the
+    module to revert and overwrite local modifications to make git actions
+    succeed.
+  * hg: When local modifications exist in a checkout, the hg module used to
+    default to removing the modifications on any operation.  Now the module
+    will not remove the modifications unless force=yes is specified.
+  * subversion: When updating a checkout with local modifications, you now need
+    to add force so the module will revert the modifications before updating.
+
+* Optimize the plugin loader to cache available plugins much more efficiently.
+  For some use cases this can lead to dramatic improvements in startup time.
+
+* Fix skipped tasks to not display their parameters if no_log is specified.
+
+## 1.8.4 "You Really Got Me" - Feb 19, 2015
+
+* Fixed regressions in ec2 and mount modules, introduced in 1.8.3
+
+## 1.8.3 "You Really Got Me" - Feb 17, 2015
+
+* Fixing a security bug related to the default permissions set on a tempoary file created when using "ansible-vault view <filename>".
+* Many bug fixes, for both core code and core modules.
+
+## 1.8.2 "You Really Got Me" - Dec 04, 2014
+
+* Various bug fixes for packaging issues related to modules.
+* Various bug fixes for lookup plugins.
+* Various bug fixes for some modules (continued cleanup of postgresql issues, etc.).
+
+* Add a clone parameter to git module that allows you to get information about a remote repo even if it doesn't exist locally.
+
+## 1.8.1 "You Really Got Me" - Nov 26, 2014
+
+* Various bug fixes in postgresql and mysql modules.
+* Fixed a bug related to lookup plugins used within roles not finding files based on the relative paths to the roles files/ directory.
+* Fixed a bug related to vars specified in plays being templated too early, resulting in incorrect variable interpolation.
+* Fixed a bug related to git submodules in bare repos.
+
+## 1.8 "You Really Got Me" - Nov 25, 2014
+
+Major changes:
+
+* fact caching support, pluggable, initially supports Redis (DOCS pending)
+* 'serial' size in a rolling update can be specified as a percentage
+* added new Jinja2 filters, 'min' and 'max' that take lists
+* new 'ansible_version' variable available contains a dictionary of version info
+* For ec2 dynamic inventory, ec2.ini can has various new configuration options
+* 'ansible vault view filename.yml' opens filename.yml decrypted in a pager.
+* no_log parameter now surpressess data from callbacks/output as well as syslog
+* ansible-galaxy install -f requirements.yml allows advanced options and installs from non-galaxy SCM sources and tarballs.
+* command_warnings feature will warn about when usage of the shell/command module can be simplified to use core modules - this can be enabled in ansible.cfg
+* new omit value can be used to leave off a parameter when not set, like so module_name: a=1 b={{ c | default(omit) }}, would not pass value for b (not even an empty value) if c was not set.
+* developers: 'baby JSON' in module responses, originally intended for writing modules in bash, is removed as a feature to simplify logic, script module remains available for running bash scripts.
+* async jobs started in "fire & forget" mode can now be checked on at a later time.
+* added ability to subcategorize modules for docs.ansible.com
+* added ability for shipped modules to have aliases with symlinks
+* added ability to deprecate older modules by starting with "_" and including "deprecated: message why" in module docs
+
+New Modules:
+
+* cloud: rax_cdb - manages Rackspace Cloud Database instances
+* cloud: rax_cdb_database - manages Rackspace Cloud Databases
+* cloud: rax_cdb_user - manages Rackspace Cloud Database users
+* monitoring: zabbix_maintaince - handles outage windows with Zabbix
+* monitoring: bigpanda - support for bigpanda
+* net_infrastructure: a10_server - manages server objects on A10 devices
+* net_infrastructure: a10_service_group - manages service group objects on A10 devices
+* net_infrastructure: a10_virtual_server - manages virtual server objects on A10 devices
+* system: getent - read getent databases
+
+Some other notable changes:
+
+* added the ability to set "instance filters" in the ec2.ini to limit results from the inventory plugin.
+* upgrades for various variable precedence items and parsing related items
+* added a new "follow" parameter to the file and copy modules, which allows actions to be taken on the target of a symlink rather than the symlink itself.
+* if a module should ever traceback, it will return a standard error, catchable by ignore_errors, versus an 'unreachable'
+* ec2_lc: added support for multiple new parameters like kernel_id, ramdisk_id and ebs_optimized.
+* ec2_elb_lb: added support for the connection_draining_timeout and cross_az_load_balancing options.
+* support for symbolic representations (ie. u+rw) for file permission modes (file/copy/template modules etc.).
+* docker: Added support for specifying the net type of the container.
+* docker: support for specifying read-only volumes.
+* docker: support for specifying the API version to use for the remote connection.
+* openstack modules: various improvements
+* irc: ssl support for the notification module
+* npm: fix flags passed to package installation
+* windows: improved error handling
+* setup: additional facts on System Z
+* apt_repository: certificate validation can be disabled if requested
+* pagerduty module: misc improvements
+* ec2_lc: public_ip boolean configurable in launch configurations
+* ec2_asg: fixes related to proper termination of an autoscaling group
+* win_setup: total memory fact correction
+* ec2_vol: ability to list existing volumes
+* ec2: can set optimized flag
+* various parser improvements
+* produce a friendly error message if the SSH key is too permissive
+* ec2_ami_search: support for SSD and IOPS provisioned EBS images
+* can set ansible_sudo_exe as an inventory variable which allows specifying
+  a different sudo (or equivalent) command
+* git module: Submodule handling has changed.  Previously if you used the
+  ``recursive`` parameter to handle submodules, ansible would track the
+  submodule upstream's head revision.  This has been changed to checkout the
+  version of the submodule specified in the superproject's git repository.
+  This is inline with what git submodule update does.  If you want the old
+  behaviour use the new module parameter track_submodules=yes
+* Checksumming of transferred files has been made more portable and now uses
+  the sha1 algorithm instead of md5 to be compatible with FIPS-140.
+  - As a small side effect, the fetch module no longer returns a useful value
+    in remote_md5.  If you need a replacement, switch to using remote_checksum
+    which returns the sha1sum of the remote file.
+* ansible-doc CLI tool contains various improvements for working with different terminals
+
+And various other bug fixes and improvements ...
+
+
+## 1.7.2 "Summer Nights" - Sep 24, 2014
+
+- Fixes a bug in accelerate mode which caused a traceback when trying to use that connection method.
+- Fixes a bug in vault where the password file option was not being used correctly internally.
+- Improved multi-line parsing when using YAML literal blocks (using > or |).
+- Fixed a bug with the file module and the creation of relative symlinks.
+- Fixed a bug where checkmode was not being honored during the templating of files.
+- Other various bug fixes.
+
+## 1.7.1 "Summer Nights" - Aug 14, 2014
+
+- Security fix to disallow specifying 'args:' as a string, which could allow the insertion of extra module parameters through variables.
+- Performance enhancements related to previous security fixes, which could cause slowness when modules returned very large JSON results. This specifically impacted the unarchive module frequently, which returns the details of all unarchived files in the result.
+- Docker module bug fixes:
+  * Fixed support for specifying rw/ro bind modes for volumes
+  * Fixed support for allowing the tag in the image parameter
+- Various other bug fixes
+
+## 1.7 "Summer Nights" - Aug 06, 2014
+
+Major new features:
+
+* Windows support (alpha) using native PowerShell remoting
+* Tasks can now specify `run_once: true`, meaning they will be executed exactly once. This can be combined with delegate_to to trigger actions you want done just the one time versus for every host in inventory.
+
+New inventory scripts:
+
+* SoftLayer
+* Windows Azure
+
+New Modules:
+
+* cloud: azure
+* cloud: rax_meta
+* cloud: rax_scaling_group
+* cloud: rax_scaling_policy
+* windows: version of setup module
+* windows: version of slurp module
+* windows: win_feature
+* windows: win_get_url
+* windows: win_msi
+* windows: win_ping
+* windows: win_user
+* windows: win_service
+* windows: win_group
+
+Other notable changes:
+
+* Security fixes
+  - Prevent the use of lookups when using legaxy "{{ }}" syntax around variables and with_* loops.
+  - Remove relative paths in TAR-archived file names used by ansible-galaxy.
+* Inventory speed improvements for very large inventories.
+* Vault password files can now be executable, to support scripts that fetch the vault password.
+
+
+## 1.6.10 "And the Cradle Will Rock" - Jul 25, 2014
+
+- Fixes an issue with the copy module when copying a directory that fails when changing file attributes and the target file already exists
+- Improved unicode handling when splitting args
+
+## 1.6.9 "And the Cradle Will Rock" - Jul 24, 2014
+
+- Further improvements to module parameter parsing to address additional regressions caused by security fixes
+
+## 1.6.8 "And the Cradle Will Rock" - Jul 22, 2014
+
+- Corrects a regression in the way shell and command parameters were being parsed
+
+## 1.6.7 "And the Cradle Will Rock" - Jul 21, 2014
+
+- Security fixes:
+  * Strip lookup calls out of inventory variables and clean unsafe data
+    returned from lookup plugins (CVE-2014-4966)
+  * Make sure vars don't insert extra parameters into module args and prevent
+    duplicate params from superseding previous params (CVE-2014-4967)
+
+## 1.6.6 "And the Cradle Will Rock" - Jul 01, 2014
+
+- Security updates to further protect against the incorrect execution of untrusted data
+
+## 1.6.4, 1.6.5 "And the Cradle Will Rock" - Jun 25, 2014
+
+- Security updates related to evaluation of untrusted remote inputs
+
+## 1.6.3 "And the Cradle Will Rock" - Jun 09, 2014
+
+- Corrects a regression where handlers were run across all hosts, not just those that triggered the handler.
+- Fixed a bug in which modules did not support properly moving a file atomically when su was in use.
+- Fixed two bugs related to symlinks with directories when using the file module.
+- Fixed a bug related to MySQL master replication syntax.
+- Corrects a regression in the order of variable merging done by the internal runner code.
+- Various other minor bug fixes.
+
+## 1.6.2 "And the Cradle Will Rock" - May 23, 2014
+
+- If an improper locale is specified, core modules will now automatically revert to using the 'C' locale.
+- Modules using the fetch_url utility will now obey proxy environment variables.
+- The SSL validation step in fetch_url will likewise obey proxy settings, however only proxies using the http protocol are supported.
+- Fixed multiple bugs in docker module related to version changes upstream.
+- Fixed a bug in the ec2_group module where egress rules were lost when a VPC was specified.
+- Fixed two bugs in the synchronize module:
+  * a trailing slash might be lost when calculating relative paths, resulting in an incorrect destination.
+  * the sync might use the inventory directory incorrectly instead of the playbook or role directory.
+- Files will now only be chown'd on an atomic move if the src/dest uid/gid do not match.
+
+## 1.6.1 "And the Cradle Will Rock" - May 7, 2014
+
+- Fixed a bug in group_by, where systems were being grouped incorrectly.
+- Fixed a bug where file descriptors may leak to a child process when using accelerate.
+- Fixed a bug in apt_repository triggered when python-apt not being installed/available.
+- Fixed a bug in the apache2_module module, where modules were not being disabled correctly.
+
+## 1.6 "And the Cradle Will Rock" - May 5, 2014
+
+Major features/changes:
+
+* The deprecated legacy variable templating system has been finally removed.  Use {{ foo }} always not $foo or ${foo}.
+* Any data file can also be JSON.  Use sparingly -- with great power comes great responsibility.  Starting file with "{" or "[" denotes JSON.
+* Added 'gathering' param for ansible.cfg to change the default gather_facts policy.
+* Accelerate improvements:
+  - multiple users can connect with different keys, when `accelerate_multi_key = yes` is specified in the ansible.cfg.
+  - daemon lifetime is now based on the time from the last activity, not the time from the daemon's launch.
+* ansible-playbook now accepts --force-handlers to run handlers even if tasks result in failures.
+* Added VMWare support with the vsphere_guest module.
+
+New Modules:
+
+* files: replace
+* packaging: cpanm (Perl)
+* packaging: portage
+* packaging: composer (PHP)
+* packaging: homebrew_tap (OS X)
+* packaging: homebrew_cask (OS X) 
+* packaging: apt_rpm
+* packaging: layman
+* monitoring: logentries
+* monitoring: rollbar_deployment
+* monitoring: librato_annotation
+* notification: nexmo (SMS)
+* notification: twilio (SMS)
+* notification: slack (Slack.com)
+* notification: typetalk (Typetalk.in)
+* notification: sns (Amazon)
+* system: debconf
+* system: ufw
+* system: locale_gen
+* system: alternatives
+* system: capabilities
+* net_infrastructure: bigip_facts
+* net_infrastructure: dnssimple
+* net_infrastructure: lldp
+* web_infrastructure: apache2_module
+* cloud: digital_ocean_domain
+* cloud: digital_ocean_sshkey 
+* cloud: rax_identity
+* cloud: rax_cbs (cloud block storage)
+* cloud: rax_cbs_attachments
+* cloud: ec2_asg (configure autoscaling groups)
+* cloud: ec2_scaling_policy
+* cloud: ec2_metric_alarm
+* cloud: vsphere_guest
+
+Other notable changes:
+
+* example callback plugin added for hipchat
+* added example inventory plugin for vcenter/vsphere
+* added example inventory plugin for doing really trivial inventory from SSH config files
+* libvirt module now supports destroyed and paused as states
+* s3 module can specify metadata
+* security token additions to ec2 modules
+* setup module code moved into module_utils/, facts now accessible by other modules  
+* synchronize module sets relative dirs based on inventory or role path
+* misc bugfixes and other parameters
+* the ec2_key module now has wait/wait_timeout parameters
+* added version_compare filter (see docs)
+* added ability for module documentation YAML to utilize shared module snippets for common args
+* apt module now accepts "deb" parameter to install local dpkg files
+* regex_replace filter plugin added
+* added an inventory script for Docker
+* added an inventory script for Abiquo
+* the get_url module now accepts url_username and url_password as parameters, so sites which require
+  authentication no longer need to have them embedded in the url
+* ... to be filled in from changelogs ...
+* 
+
+## 1.5.5 "Love Walks In" - April 18, 2014
+
+- Security fix for vault, to ensure the umask is set to a restrictive mode before creating/editing vault files.
+- Backported apt_repository security fixes relating to filename/mode upon sources list file creation.
+
+## 1.5.4 "Love Walks In" - April 1, 2014
+
+- Security fix for safe_eval, which further hardens the checking of the evaluation function.
+- Changing order of variable precendence for system facts, to ensure that inventory variables take precedence over any facts that may be set on a host.
+
+## 1.5.3 "Love Walks In" - March 13, 2014
+
+- Fix validate_certs and run_command errors from previous release
+- Fixes to the git module related to host key checking
+
+## 1.5.2 "Love Walks In" - March 11, 2014
+
+- Fix module errors in airbrake and apt from previous release
+
+## 1.5.1 "Love Walks In" - March 10, 2014
+
+- Force command action to not be executed by the shell unless specifically enabled.
+- Validate SSL certs accessed through urllib*.
+- Implement new default cipher class AES256 in ansible-vault.
+- Misc bug fixes.
+
+## 1.5 "Love Walks In" - February 28, 2014
+
+Major features/changes:
+
+* when_foo which was previously deprecated is now removed, use "when:" instead.  Code generates appropriate error suggestion.
+* include + with_items which was previously deprecated is now removed, ditto.  Use with_nested / with_together, etc.
+* only_if, which is much older than when_foo and was deprecated, is similarly removed.
+* ssh connection plugin is now more efficient if you add 'pipelining=True' in ansible.cfg under [ssh_connection], see example.cfg
+* localhost/127.0.0.1 is not required to be in inventory if referenced, if not in inventory, it does not implicitly appear in the 'all' group.
+* git module has new parameters (accept_hostkey, key_file, ssh_opts) to ease the usage of git and ssh protocols. 
+* when using accelerate mode, the daemon will now be restarted when specifying a different remote_user between plays.
+* added no_log: option for tasks. When used, no logging information will be sent to syslog during the module execution.
+* acl module now handles 'default' and allows for either shorthand entry or specific fields per entry section
+* play_hosts is a new magic variable to provide a list of hosts in scope for the current play.
+* ec2 module now accepts 'exact_count' and 'count_tag' as a way to enforce a running number of nodes by tags.
+* all ec2 modules that work with Eucalyptus also now support a 'validate_certs' option, which can be set to 'off' for installations using self-signed certs.
+* Start of new integration test infrastructure (WIP, more details TBD)
+* if repoquery is unavailble, the yum module will automatically attempt to install yum-utils
+* ansible-vault: a framework for encrypting your playbooks and variable files 
+* added support for privilege escalation via 'su' into bin/ansible and bin/ansible-playbook and associated keywords 'su', 'su_user', 'su_pass' for tasks/plays
+
+New modules:
+
+* cloud: ec2_elb_lb
+* cloud: ec2_key
+* cloud: ec2_snapshot
+* cloud: rax_dns
+* cloud: rax_dns_record
+* cloud: rax_files
+* cloud: rax_files_objects
+* cloud: rax_keypair
+* cloud: rax_queue
+* cloud: docker_image
+* messaging: rabbitmq_policy
+* system: at
+* utilities: assert
+
+Other notable changes (many new module params & bugfixes may not be listed):
 
 * no_reboot is now defaulted to "no" in the ec2_ami module to ensure filesystem consistency in the resulting AMI.
+* sysctl module overhauled
+* authorized_key module overhauled
+* synchronized module now handles local transport better
+* apt_key module now ignores case on keys
+* zypper_repository now skips on check mode
+* file module now responds to force behavior when dealing with hardlinks
+* new lookup plugin 'csvfile'
+* fixes to allow hash_merge behavior to work with dynamic inventory
+* mysql module will use port argument on dump/import
+* subversion module now ignores locale to better intercept status messages
+* rax api_key argument is no longer logged
+* backwards/forwards compatibility for OpenStack modules, 'quantum' modules grok neutron renaming
+* hosts properly uniqueified if appearing in redundant groups
+* hostname module support added for ScientificLinux
+* ansible-pull can now show live stdout and pass verbosity levels to ansible-playbook
+* ec2 instances can now be stopped or started
+* additional volumes can be created when creating new ec2 instances
+* user module can move a home directory
+* significant enhancement and cleanup of rackspace modules
+* ansible_ssh_private_key_file can be templated
+* docker module updated to support docker-py 0.3.0
+* various other bug fixes
+* md5 logic improved during sudo operation
+* support for ed25519 keys in authorized_key module
+* ability to set directory permissions during a recursive copy (directory_mode parameter)
+
+## 1.4.5 "Could This Be Magic" - February 12, 2014
+
+- fixed issue with permissions being incorrect on fireball/accelerate keys when the umask setting was too loose.
+
+## 1.4.4 "Could This Be Magic" - January 6, 2014
+
+- fixed a minor issue with newer versions of pip dropping the "use-mirrors" parameter.
+
+## 1.4.3 "Could This Be Magic" - December 20, 2013
+
+- Fixed role_path parsing from ansible.cfg
+- Fixed default role templates
+
+## 1.4.2 "Could This Be Magic" - December 18, 2013
+
+* Fixed a few bugs related to unicode
+* Fixed errors in the ssh connection method with large data returns
+* Miscellaneous fixes for a few modules
+* Add the ansible-galaxy command
 
 ## 1.4.1 "Could This Be Magic" - November 27, 2013
 
@@ -16,7 +440,7 @@ Highlighted new features:
 * Added do-until feature, which can be used to retry a failed task a specified number of times with a delay in-between the retries.
 * Added failed_when option for tasks, which can be used to specify logical statements that make it easier to determine when a task has failed, or to make it easier to ignore certain non-zero return codes for some commands.
 * Added the "subelement" lookup plugin, which allows iteration of the keys of a dictionary or items in a list.
-* Added the capability to use either paramiko or ssh for the inital setup connection of an accelerated playbook.
+* Added the capability to use either paramiko or ssh for the initial setup connection of an accelerated playbook.
 * Automatically provide advice on common parser errors users encounter.
 * Deprecation warnings are now shown for legacy features: when_integer/etc, only_if, include+with_items, etc.  Can be disabled in ansible.cfg
 * The system will now provide helpful tips around possible YAML syntax errors increasing ease of use for new users.
@@ -86,7 +510,7 @@ Misc changes (all module additions/fixes may not listed):
 * Added a -vvvv level, which will show SSH client debugging information in the event of a failure.
 * Includes now support the more standard syntax, similar to that of role includes and dependencies. 
 * Changed the `user:` parameter on plays to `remote_user:` to prevent confusion with the module of the same name.  Still backwards compatible on play parameters.
-* Added parameter to allow the fetch module to skip the md5 validation step ('validate_md5=false'). This is usefull when fetching files that are actively being written to, such as live log files.
+* Added parameter to allow the fetch module to skip the md5 validation step ('validate_md5=false'). This is useful when fetching files that are actively being written to, such as live log files.
 * Inventory hosts are used in the order they appear in the inventory.
 * in hosts: foo[2-5] type syntax, the iterators now are zero indexed and the last index is non-inclusive, to match Python standards.
 * There is now a way for a callback plugin to disable itself.  See osx_say example code for an example.
@@ -345,7 +769,7 @@ Modules added:
 * packages: redhat_subscription: manage Red Hat subscription usage
 * packages: rhn_register: basic RHN registration
 * packages: zypper (SuSE)
-* database: postgresql_priv: manages postgresql priveledges
+* database: postgresql_priv: manages postgresql privileges
 * networking: bigip_pool: load balancing with F5s
 * networking: ec2_elb: add and remove machines from ec2 elastic load balancers
 * notification: hipchat: send notification events to hipchat
@@ -387,7 +811,7 @@ Bugfixes and Misc Changes:
 * private_ip parameter added to the ec2 module
 * $FILE and $PIPE now tolerate unicode
 * various plugin loading operations have been made more efficient
-* hostname now uses platform.node versus socket.gethostname to be more consistant with Unix 'hostname'
+* hostname now uses platform.node versus socket.gethostname to be more consistent with Unix 'hostname'
 * fix for SELinux operations on Unicode path names
 * inventory directory locations now ignore files with .ini extensions, making hybrid inventory easier
 * copy module in check-mode now reports back correct changed status when used with force=no
@@ -427,8 +851,8 @@ the variable is still registered for the host, with the attribute skipped: True.
 * localhost and 127.0.0.1 are now fuzzy matched in inventory (are now more or less interchangeable)
 * AIX improvements/fixes for users, groups, facts
 * lineinfile now does atomic file replacements
-* fix to not pass PasswordAuthentication=no in the config file unneccessarily for SSH connection type
-* for for authorized_key on Debian Squeeze
+* fix to not pass PasswordAuthentication=no in the config file unnecessarily for SSH connection type
+* for authorized_key on Debian Squeeze
 * fixes for apt_repository module reporting changed incorrectly on certain repository types
 * allow the virtualenv argument to the pip module to be a pathname
 * service pattern argument now correctly read for BSD services
@@ -854,7 +1278,7 @@ Module changes:
 * setup module now detects interfaces with aliases
 * better handling of VM guest type detection in setup module
 * new module boilerplate code to check for mutually required arguments, arguments required together, exclusive args
-* add pattern= as a paramter to the service module (for init scripts that don't do status, or do poor status)
+* add pattern= as a parameter to the service module (for init scripts that don't do status, or do poor status)
 * various fixes to mysql & postresql modules
 * added a thirsty= option (boolean, default no) to the get_url module to decide to download the file every time or not
 * added a wait_for module to poll for ports being open

@@ -1,4 +1,4 @@
-# (C) 2012-2013, Michael DeHaan, <michael.dehaan@gmail.com>
+# (C) 2012-2014, Michael DeHaan, <michael.dehaan@gmail.com>
 
 # This file is part of Ansible
 #
@@ -25,7 +25,10 @@ import fnmatch
 import tempfile
 import fcntl
 import constants
+import locale
 from ansible.color import stringc
+from ansible.module_utils import basic
+from ansible.utils.unicode import to_unicode, to_bytes
 
 import logging
 if constants.DEFAULT_LOG_PATH != '':
@@ -74,12 +77,19 @@ def get_cowsay_info():
 cowsay, noncow = get_cowsay_info()
 
 def log_lockfile():
+    # create the path for the lockfile and open it
     tempdir = tempfile.gettempdir()
     uid = os.getuid()
     path = os.path.join(tempdir, ".ansible-lock.%s" % uid)
-    return path
-
-LOG_LOCK = open(log_lockfile(), 'w')
+    lockfile = open(path, 'w')
+    # use fcntl to set FD_CLOEXEC on the file descriptor, 
+    # so that we don't leak the file descriptor later
+    lockfile_fd = lockfile.fileno()
+    old_flags = fcntl.fcntl(lockfile_fd, fcntl.F_GETFD)
+    fcntl.fcntl(lockfile_fd, fcntl.F_SETFD, old_flags | fcntl.FD_CLOEXEC)
+    return lockfile
+    
+LOG_LOCK = log_lockfile()
 
 def log_flock(runner):
     if runner is not None:
@@ -108,6 +118,12 @@ def log_unflock(runner):
         except OSError:
             pass
 
+def set_playbook(callback, playbook):
+    ''' used to notify callback plugins of playbook context '''
+    callback.playbook = playbook
+    for callback_plugin in callback_plugins:
+        callback_plugin.playbook = playbook
+
 def set_play(callback, play):
     ''' used to notify callback plugins of context '''
     callback.play = play
@@ -128,9 +144,15 @@ def display(msg, color=None, stderr=False, screen_only=False, log_only=False, ru
         msg2 = stringc(msg, color)
     if not log_only:
         if not stderr:
-            print msg2
+            try:
+                print msg2
+            except UnicodeEncodeError:
+                print msg2.encode('utf-8')
         else:
-            print >>sys.stderr, msg2
+            try:
+                print >>sys.stderr, msg2
+            except UnicodeEncodeError:
+                print >>sys.stderr, msg2.encode('utf-8')
     if constants.DEFAULT_LOG_PATH != '':
         while msg.startswith("\n"):
             msg = msg.replace("\n","")
@@ -166,6 +188,7 @@ def vvvv(msg, host=None):
     return verbose(msg, host=host, caplevel=3)
 
 def verbose(msg, host=None, caplevel=2):
+    msg = utils.sanitize_output(msg)
     if utils.VERBOSITY > caplevel:
         if host is None:
             display(msg, color='blue')
@@ -236,7 +259,7 @@ def regular_generic_msg(hostname, result, oneline, caption):
 
 def banner_cowsay(msg):
 
-    if msg.find(": [") != -1:
+    if ": [" in msg:
         msg = msg.replace("[","")
         if msg.endswith("]"):
             msg = msg[:-1]
@@ -323,9 +346,6 @@ class DefaultRunnerCallbacks(object):
     def on_ok(self, host, res):
         call_callback_module('runner_on_ok', host, res)
 
-    def on_error(self, host, msg):
-        call_callback_module('runner_on_error', host, msg)
-
     def on_skipped(self, host, item=None):
         call_callback_module('runner_on_skipped', host, item=item)
 
@@ -384,10 +404,6 @@ class CliRunnerCallbacks(DefaultRunnerCallbacks):
         display("%s | skipped" % (host), runner=self.runner)
         super(CliRunnerCallbacks, self).on_skipped(host, item)
 
-    def on_error(self, host, err):
-        display("err: [%s] => %s\n" % (host, err), stderr=True, runner=self.runner)
-        super(CliRunnerCallbacks, self).on_error(host, err)
-
     def on_no_hosts(self):
         display("no hosts matched\n", stderr=True, runner=self.runner)
         super(CliRunnerCallbacks, self).on_no_hosts()
@@ -397,11 +413,12 @@ class CliRunnerCallbacks(DefaultRunnerCallbacks):
             self._async_notified[jid] = clock + 1
         if self._async_notified[jid] > clock:
             self._async_notified[jid] = clock
-            display("<job %s> polling, %ss remaining" % (jid, clock), runner=self.runner)
+            display("<job %s> polling on %s, %ss remaining" % (jid, host, clock), runner=self.runner)
         super(CliRunnerCallbacks, self).on_async_poll(host, res, jid, clock)
 
     def on_async_ok(self, host, res, jid):
-        display("<job %s> finished on %s => %s"%(jid, host, utils.jsonify(res,format=True)), runner=self.runner)
+        if jid:
+            display("<job %s> finished on %s => %s"%(jid, host, utils.jsonify(res,format=True)), runner=self.runner)
         super(CliRunnerCallbacks, self).on_async_ok(host, res, jid)
 
     def on_async_failed(self, host, res, jid):
@@ -435,9 +452,18 @@ class PlaybookRunnerCallbacks(DefaultRunnerCallbacks):
         self._async_notified = {}
 
     def on_unreachable(self, host, results):
+        if self.runner.delegate_to:
+            host = '%s -> %s' % (host, self.runner.delegate_to)
+
         item = None
         if type(results) == dict:
             item = results.get('item', None)
+            if isinstance(item, unicode):
+                item = utils.unicode.to_bytes(item)
+            results = basic.json_dict_unicode_to_bytes(results)
+        else:
+            results = utils.unicode.to_bytes(results)
+        host = utils.unicode.to_bytes(host)
         if item:
             msg = "fatal: [%s] => (item=%s) => %s" % (host, item, results)
         else:
@@ -446,7 +472,8 @@ class PlaybookRunnerCallbacks(DefaultRunnerCallbacks):
         super(PlaybookRunnerCallbacks, self).on_unreachable(host, results)
 
     def on_failed(self, host, results, ignore_errors=False):
-
+        if self.runner.delegate_to:
+            host = '%s -> %s' % (host, self.runner.delegate_to)
 
         results2 = results.copy()
         results2.pop('invocation', None)
@@ -473,12 +500,14 @@ class PlaybookRunnerCallbacks(DefaultRunnerCallbacks):
         if returned_msg:
             display("msg: %s" % returned_msg, color='red', runner=self.runner)
         if not parsed and module_msg:
-            display("invalid output was: %s" % module_msg, color='red', runner=self.runner)
+            display(module_msg, color='red', runner=self.runner)
         if ignore_errors:
             display("...ignoring", color='cyan', runner=self.runner)
         super(PlaybookRunnerCallbacks, self).on_failed(host, results, ignore_errors=ignore_errors)
 
     def on_ok(self, host, host_result):
+        if self.runner.delegate_to:
+            host = '%s -> %s' % (host, self.runner.delegate_to)
 
         item = host_result.get('item', None)
 
@@ -512,21 +541,15 @@ class PlaybookRunnerCallbacks(DefaultRunnerCallbacks):
                 display(msg, color='green', runner=self.runner)
             else:
                 display(msg, color='yellow', runner=self.runner)
+        if constants.COMMAND_WARNINGS and 'warnings' in host_result2 and host_result2['warnings']:
+            for warning in host_result2['warnings']:
+                display("warning: %s" % warning, color='purple', runner=self.runner)
         super(PlaybookRunnerCallbacks, self).on_ok(host, host_result)
 
-    def on_error(self, host, err):
-
-        item = err.get('item', None)
-        msg = ''
-        if item:
-            msg = "err: [%s] => (item=%s) => %s" % (host, item, err)
-        else:
-            msg = "err: [%s] => %s" % (host, err)
-
-        display(msg, color='red', stderr=True, runner=self.runner)
-        super(PlaybookRunnerCallbacks, self).on_error(host, err)
-
     def on_skipped(self, host, item=None):
+        if self.runner.delegate_to:
+            host = '%s -> %s' % (host, self.runner.delegate_to)
+
         if constants.DISPLAY_SKIPPED_HOSTS:
             msg = ''
             if item:
@@ -550,8 +573,9 @@ class PlaybookRunnerCallbacks(DefaultRunnerCallbacks):
         super(PlaybookRunnerCallbacks, self).on_async_poll(host,res,jid,clock)
 
     def on_async_ok(self, host, res, jid):
-        msg = "<job %s> finished on %s"%(jid, host)
-        display(msg, color='cyan', runner=self.runner)
+        if jid:
+            msg = "<job %s> finished on %s"%(jid, host)
+            display(msg, color='cyan', runner=self.runner)
         super(PlaybookRunnerCallbacks, self).on_async_ok(host, res, jid)
 
     def on_async_failed(self, host, res, jid):
@@ -587,11 +611,13 @@ class PlaybookCallbacks(object):
         call_callback_module('playbook_on_no_hosts_remaining')
 
     def on_task_start(self, name, is_conditional):
+        name = utils.unicode.to_bytes(name)
         msg = "TASK: [%s]" % name
         if is_conditional:
             msg = "NOTIFIED: [%s]" % name
 
         if hasattr(self, 'start_at'):
+            self.start_at = utils.unicode.to_bytes(self.start_at)
             if name == self.start_at or fnmatch.fnmatch(name, self.start_at):
                 # we found out match, we can get rid of this now
                 del self.start_at
@@ -604,7 +630,13 @@ class PlaybookCallbacks(object):
         if hasattr(self, 'start_at'): # we still have start_at so skip the task
             self.skip_task = True
         elif hasattr(self, 'step') and self.step:
-            msg = ('Perform task: %s (y/n/c): ' % name).encode(sys.stdout.encoding)
+            if isinstance(name, str):
+                name = utils.unicode.to_unicode(name)
+            msg = u'Perform task: %s (y/n/c): ' % name
+            if sys.stdout.encoding:
+                msg = to_bytes(msg, sys.stdout.encoding)
+            else:
+                msg = to_bytes(msg)
             resp = raw_input(msg)
             if resp.lower() in ['y','yes']:
                 self.skip_task = False
@@ -623,37 +655,46 @@ class PlaybookCallbacks(object):
 
     def on_vars_prompt(self, varname, private=True, prompt=None, encrypt=None, confirm=False, salt_size=None, salt=None, default=None):
 
-        if prompt and default:
+        if prompt and default is not None:
             msg = "%s [%s]: " % (prompt, default)
         elif prompt:
             msg = "%s: " % prompt
         else:
             msg = 'input for %s: ' % varname
 
-        def prompt(prompt, private):
+        def do_prompt(prompt, private):
+            if sys.stdout.encoding:
+                msg = prompt.encode(sys.stdout.encoding)
+            else:
+                # when piping the output, or at other times when stdout
+                # may not be the standard file descriptor, the stdout
+                # encoding may not be set, so default to something sane
+                msg = prompt.encode(locale.getpreferredencoding())
             if private:
-                return getpass.getpass(prompt)
-            return raw_input(prompt)
+                return getpass.getpass(msg)
+            return raw_input(msg)
 
 
         if confirm:
             while True:
-                result = prompt(msg, private)
-                second = prompt("confirm " + msg, private)
+                result = do_prompt(msg, private)
+                second = do_prompt("confirm " + msg, private)
                 if result == second:
                     break
                 display("***** VALUES ENTERED DO NOT MATCH ****")
         else:
-            result = prompt(msg, private)
+            result = do_prompt(msg, private)
 
         # if result is false and default is not None
-        if not result and default:
+        if not result and default is not None:
             result = default
 
 
         if encrypt:
-            result = utils.do_encrypt(result,encrypt,salt_size,salt)
+            result = utils.do_encrypt(result, encrypt, salt_size, salt)
 
+        # handle utf-8 chars
+        result = to_unicode(result, errors='strict')
         call_callback_module( 'playbook_on_vars_prompt', varname, private=private, prompt=prompt,
                                encrypt=encrypt, confirm=confirm, salt_size=salt_size, salt=None, default=default
                             )
@@ -674,9 +715,9 @@ class PlaybookCallbacks(object):
         display(msg, color='cyan')
         call_callback_module('playbook_on_not_import_for_host', host, missing_file)
 
-    def on_play_start(self, pattern):
-        display(banner("PLAY [%s]" % pattern))
-        call_callback_module('playbook_on_play_start', pattern)
+    def on_play_start(self, name):
+        display(banner("PLAY [%s]" % name))
+        call_callback_module('playbook_on_play_start', name)
 
     def on_stats(self, stats):
         call_callback_module('playbook_on_stats', stats)

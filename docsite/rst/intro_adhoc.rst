@@ -1,6 +1,8 @@
 Introduction To Ad-Hoc Commands
 ===============================
 
+.. contents:: Topics
+
 .. highlight:: bash
 
 The following examples show how to use `/usr/bin/ansible` for running
@@ -30,9 +32,6 @@ port over directly to the playbook language.
 
 If you haven't read :doc:`intro_inventory` already, please look that over a bit first
 and then we'll get going.
-
-.. contents::
-   :depth: 2
 
 .. _parallelism_and_shell_commands:
 
@@ -75,6 +74,14 @@ It is also possible to sudo to a user other than root using
 
     $ ansible atlanta -a "/usr/bin/foo" -u username -U otheruser [--ask-sudo-pass]
 
+.. note::
+   
+    Rarely, some users have security rules where they constrain their sudo environment to running specific command paths only.  
+    This does not work with ansible's no-bootstrapping philosophy and hundreds of different modules.
+    If doing this, use Ansible from a special account that does not have this constraint.  
+    One way of doing this without sharing access to unauthorized users would be gating Ansible with :doc:`tower`, which
+    can hold on to an SSH credential and let members of certain organizations use it on their behalf without having direct access.
+
 Ok, so those are basics.  If you didn't read about patterns and groups yet, go back and read :doc:`intro_patterns`.
 
 The ``-f 10`` in the above specifies the usage of 10 simultaneous
@@ -116,7 +123,7 @@ File Transfer
 
 Here's another use case for the `/usr/bin/ansible` command line.  Ansible can SCP lots of files to multiple machines in parallel.
 
-To transfer a file directly to many different servers::
+To transfer a file directly to many servers::
 
     $ ansible atlanta -m copy -a "src=/etc/hosts dest=/tmp/hosts"
 
@@ -131,7 +138,7 @@ same options can be passed directly to the ``copy`` module as well::
 
 The ``file`` module can also create directories, similar to ``mkdir -p``::
 
-    $ ansible webservers -m file -a "dest=/path/to/c mode=644 owner=mdehaan group=mdehaan state=directory"
+    $ ansible webservers -m file -a "dest=/path/to/c mode=755 owner=mdehaan group=mdehaan state=directory"
 
 As well as delete directories (recursively) and delete files::
 
@@ -147,11 +154,11 @@ with yum.
 
 Ensure a package is installed, but don't update it::
 
-    $ ansible webservers -m yum -a "name=acme state=installed"
+    $ ansible webservers -m yum -a "name=acme state=present"
 
 Ensure a package is installed to a specific version::
 
-    $ ansible webservers -m yum -a "name=acme-1.5 state=installed"
+    $ ansible webservers -m yum -a "name=acme-1.5 state=present"
 
 Ensure a package is at the latest version::
 
@@ -159,7 +166,7 @@ Ensure a package is at the latest version::
 
 Ensure a package is not installed::
 
-    $ ansible webservers -m yum -a "name=acme state=removed"
+    $ ansible webservers -m yum -a "name=acme state=absent"
 
 Ansible has modules for managing packages under many platforms.  If your package manager
 does not have a module available for it, you can install
@@ -218,16 +225,16 @@ Ensure a service is stopped::
 Time Limited Background Operations
 ``````````````````````````````````
 
-Long running operations can be backgrounded, and their status can be
-checked on later. The same job ID is given to the same task on all
-hosts, so you won't lose track.  If you kick hosts and don't want
-to poll, it looks like this::
+Long running operations can be backgrounded, and their status can be checked on
+later. If you kick hosts and don't want to poll, it looks like this::
 
-    $ ansible all -B 3600 -a "/usr/bin/long_running_operation --do-stuff"
+    $ ansible all -B 3600 -P 0 -a "/usr/bin/long_running_operation --do-stuff"
 
-If you do decide you want to check on the job status later, you can::
+If you do decide you want to check on the job status later, you can use the
+async_status module, passing it the job id that was returned when you ran
+the original job in the background::
 
-    $ ansible all -m async_status -a "jid=123456789"
+    $ ansible web1.example.com -m async_status -a "jid=488359678239.2844"
 
 Polling is built-in and looks like this::
 
@@ -241,7 +248,7 @@ Be sure to use a high enough ``--forks`` value if you want to get all of your jo
 very quickly. After the time limit (in seconds) runs out (``-B``), the process on
 the remote nodes will be terminated.
 
-Typically you'll be only be backgrounding long-running
+Typically you'll only be backgrounding long-running
 shell commands or software upgrades only.  Backgrounding the copy module does not do a background file transfer.  :doc:`Playbooks <playbooks>` also support polling, and have a simplified syntax for this.
 
 .. _checking_facts:
@@ -254,7 +261,7 @@ system.  These can be used to implement conditional execution of tasks but also 
 
     $ ansible all -m setup
 
-Its also possible to filter this output to just export certain facts, see the "setup" module documentation for details.
+It's also possible to filter this output to just export certain facts, see the "setup" module documentation for details.
 
 Read more about facts at :doc:`playbooks_variables` once you're ready to read up on :doc:`Playbooks <playbooks>`. 
 

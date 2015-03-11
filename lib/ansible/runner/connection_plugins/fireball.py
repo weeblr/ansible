@@ -37,6 +37,7 @@ class Connection(object):
     def __init__(self, runner, host, port, *args, **kwargs):
 
         self.runner = runner
+        self.has_pipelining = False
 
         # attempt to work around shared-memory funness
         if getattr(self.runner, 'aes_keys', None):
@@ -52,6 +53,8 @@ class Connection(object):
         else:
             self.port = port
 
+        self.become_methods_supported=[]
+
     def connect(self):
         ''' activates the connection object '''
 
@@ -63,18 +66,21 @@ class Connection(object):
         socket = self.context.socket(zmq.REQ)
         addr = "tcp://%s:%s" % (self.host, self.port)
         socket.connect(addr)
-        self.socket = socket    
+        self.socket = socket
 
         return self
 
-    def exec_command(self, cmd, tmp_path, sudo_user, sudoable=False, executable='/bin/sh'):
+    def exec_command(self, cmd, tmp_path, become_user, sudoable=False, executable='/bin/sh', in_data=None):
         ''' run a command on the remote host '''
+
+        if in_data:
+            raise errors.AnsibleError("Internal Error: this module does not support optimized module pipelining")
 
         vvv("EXEC COMMAND %s" % cmd)
 
-        if self.runner.sudo and sudoable:
+        if self.runner.become and sudoable:
             raise errors.AnsibleError(
-                "When using fireball, do not specify sudo to run your tasks. " +
+                "When using fireball, do not specify sudo or su to run your tasks. " +
                 "Instead sudo the fireball action with sudo. " +
                 "Task will communicate with the fireball already running in sudo mode."
             )

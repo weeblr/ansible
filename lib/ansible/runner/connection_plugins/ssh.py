@@ -17,6 +17,7 @@
 #
 
 import os
+import re
 import subprocess
 import shlex
 import pipes
@@ -33,6 +34,7 @@ from ansible.callbacks import vvv
 from ansible import errors
 from ansible import utils
 
+
 class Connection(object):
     ''' ssh based connections '''
 
@@ -41,10 +43,14 @@ class Connection(object):
         self.host = host
         self.ipv6 = ':' in self.host
         self.port = port
-        self.user = user
+        self.user = str(user)
         self.password = password
         self.private_key_file = private_key_file
         self.HASHED_KEY_MAGIC = "|1|"
+        self.has_pipelining = True
+
+        # TODO: add pbrun, pfexec
+        self.become_methods_supported=['sudo', 'su', 'pbrun']
 
         fcntl.lockf(self.runner.process_lockfile, fcntl.LOCK_EX)
         self.cp_dir = utils.prepare_writeable_dir('$HOME/.ansible/cp',mode=0700)
@@ -58,22 +64,23 @@ class Connection(object):
         self.common_args = []
         extra_args = C.ANSIBLE_SSH_ARGS
         if extra_args is not None:
-            self.common_args += shlex.split(extra_args)
+            # make sure there is no empty string added as this can produce weird errors
+            self.common_args += [x.strip() for x in shlex.split(extra_args) if x.strip()]
         else:
             self.common_args += ["-o", "ControlMaster=auto",
                                  "-o", "ControlPersist=60s",
-                                 "-o", "ControlPath=%s" % (C.ANSIBLE_SSH_CONTROL_PATH % dict(directory=self.cp_dir))]
+                                 "-o", "ControlPath=\"%s\"" % (C.ANSIBLE_SSH_CONTROL_PATH % dict(directory=self.cp_dir))]
 
         cp_in_use = False
         cp_path_set = False
         for arg in self.common_args:
-            if arg.find("ControlPersist") != -1:
+            if "ControlPersist" in arg:
                 cp_in_use = True
-            if arg.find("ControlPath") != -1:
+            if "ControlPath" in arg:
                 cp_path_set = True
 
         if cp_in_use and not cp_path_set:
-            self.common_args += ["-o", "ControlPath=%s" % (C.ANSIBLE_SSH_CONTROL_PATH % dict(directory=self.cp_dir))]
+            self.common_args += ["-o", "ControlPath=\"%s\"" % (C.ANSIBLE_SSH_CONTROL_PATH % dict(directory=self.cp_dir))]
 
         if not C.HOST_KEY_CHECKING:
             self.common_args += ["-o", "StrictHostKeyChecking=no"]
@@ -81,9 +88,9 @@ class Connection(object):
         if self.port is not None:
             self.common_args += ["-o", "Port=%d" % (self.port)]
         if self.private_key_file is not None:
-            self.common_args += ["-o", "IdentityFile="+os.path.expanduser(self.private_key_file)]
+            self.common_args += ["-o", "IdentityFile=\"%s\"" % os.path.expanduser(self.private_key_file)]
         elif self.runner.private_key_file is not None:
-            self.common_args += ["-o", "IdentityFile="+os.path.expanduser(self.runner.private_key_file)]
+            self.common_args += ["-o", "IdentityFile=\"%s\"" % os.path.expanduser(self.runner.private_key_file)]
         if self.password:
             self.common_args += ["-o", "GSSAPIAuthentication=no",
                                  "-o", "PubkeyAuthentication=no"]
@@ -96,6 +103,28 @@ class Connection(object):
         self.common_args += ["-o", "ConnectTimeout=%d" % self.runner.timeout]
 
         return self
+
+    def _run(self, cmd, indata):
+        if indata:
+            # do not use pseudo-pty
+            p = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdin = p.stdin
+        else:
+            # try to use upseudo-pty
+            try:
+                # Make sure stdin is a proper (pseudo) pty to avoid: tcgetattr errors
+                master, slave = pty.openpty()
+                p = subprocess.Popen(cmd, stdin=slave,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                stdin = os.fdopen(master, 'w', 0)
+                os.close(slave)
+            except:
+                p = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                stdin = p.stdin
+
+        return (p, stdin)
 
     def _password_cmd(self):
         if self.password:
@@ -115,117 +144,37 @@ class Connection(object):
             os.write(self.wfd, "%s\n" % self.password)
             os.close(self.wfd)
 
-    def not_in_host_file(self, host):
-        host_file = os.path.expanduser(os.path.expandvars("~${USER}/.ssh/known_hosts"))
-        if not os.path.exists(host_file):
-            print "previous known host file not found"
-            return True
-        host_fh = open(host_file)
-        data = host_fh.read()
-        host_fh.close()
-        for line in data.split("\n"):
-            if line is None or line.find(" ") == -1:
-                continue
-            tokens = line.split()
-            if tokens[0].find(self.HASHED_KEY_MAGIC) == 0:
-                # this is a hashed known host entry
-                try:
-                    (kn_salt,kn_host) = tokens[0][len(self.HASHED_KEY_MAGIC):].split("|",2)
-                    hash = hmac.new(kn_salt.decode('base64'), digestmod=sha1)
-                    hash.update(host)
-                    if hash.digest() == kn_host.decode('base64'):
-                        return False
-                except:
-                    # invalid hashed host key, skip it
-                    continue
-            else:
-                # standard host file entry
-                if host in tokens[0]:
-                    return False
-        return True
-
-    def exec_command(self, cmd, tmp_path, sudo_user,sudoable=False, executable='/bin/sh'):
-        ''' run a command on the remote host '''
-
-        ssh_cmd = self._password_cmd()
-        ssh_cmd += ["ssh", "-tt"]
-        if utils.VERBOSITY > 3:
-            ssh_cmd += ["-vvv"]
-        else:
-            ssh_cmd += ["-q"]
-        ssh_cmd += self.common_args
-
-        if self.ipv6:
-            ssh_cmd += ['-6']
-        ssh_cmd += [self.host]
-
-        if not self.runner.sudo or not sudoable:
-            if executable:
-                ssh_cmd.append(executable + ' -c ' + pipes.quote(cmd))
-            else:
-                ssh_cmd.append(cmd)
-        else:
-            sudocmd, prompt, success_key = utils.make_sudo_cmd(sudo_user, executable, cmd)
-            ssh_cmd.append(sudocmd)
-
-        vvv("EXEC %s" % ssh_cmd, host=self.host)
-
-        not_in_host_file = self.not_in_host_file(self.host)
-
-        if C.HOST_KEY_CHECKING and not_in_host_file:
-            # lock around the initial SSH connectivity so the user prompt about whether to add 
-            # the host to known hosts is not intermingled with multiprocess output.
-            fcntl.lockf(self.runner.process_lockfile, fcntl.LOCK_EX)
-            fcntl.lockf(self.runner.output_lockfile, fcntl.LOCK_EX)
-        
-
-
-        try:
-            # Make sure stdin is a proper (pseudo) pty to avoid: tcgetattr errors
-            master, slave = pty.openpty()
-            p = subprocess.Popen(ssh_cmd, stdin=slave,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stdin = os.fdopen(master, 'w', 0)
-            os.close(slave)
-        except:
-            p = subprocess.Popen(ssh_cmd, stdin=subprocess.PIPE,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stdin = p.stdin
-
-        self._send_password()
-
-        if self.runner.sudo and sudoable and self.runner.sudo_pass:
-            fcntl.fcntl(p.stdout, fcntl.F_SETFL,
-                        fcntl.fcntl(p.stdout, fcntl.F_GETFL) | os.O_NONBLOCK)
-            sudo_output = ''
-            while not sudo_output.endswith(prompt) and success_key not in sudo_output:
-                rfd, wfd, efd = select.select([p.stdout], [],
-                                              [p.stdout], self.runner.timeout)
-                if p.stdout in rfd:
-                    chunk = p.stdout.read()
-                    if not chunk:
-                        raise errors.AnsibleError('ssh connection closed waiting for sudo password prompt')
-                    sudo_output += chunk
-                else:
-                    stdout = p.communicate()
-                    raise errors.AnsibleError('ssh connection error waiting for sudo password prompt')
-            if success_key not in sudo_output:
-                stdin.write(self.runner.sudo_pass + '\n')
-            fcntl.fcntl(p.stdout, fcntl.F_SETFL, fcntl.fcntl(p.stdout, fcntl.F_GETFL) & ~os.O_NONBLOCK)
-
+    def _communicate(self, p, stdin, indata, sudoable=False, prompt=None):
+        fcntl.fcntl(p.stdout, fcntl.F_SETFL, fcntl.fcntl(p.stdout, fcntl.F_GETFL) & ~os.O_NONBLOCK)
+        fcntl.fcntl(p.stderr, fcntl.F_SETFL, fcntl.fcntl(p.stderr, fcntl.F_GETFL) & ~os.O_NONBLOCK)
         # We can't use p.communicate here because the ControlMaster may have stdout open as well
         stdout = ''
         stderr = ''
         rpipes = [p.stdout, p.stderr]
+        if indata:
+            try:
+                stdin.write(indata)
+                stdin.close()
+            except:
+                raise errors.AnsibleError('SSH Error: data could not be sent to the remote host. Make sure this host can be reached over ssh')
+        # Read stdout/stderr from process
         while True:
             rfd, wfd, efd = select.select(rpipes, [], rpipes, 1)
 
-            # fail early if the sudo password is wrong
-            if self.runner.sudo and sudoable and self.runner.sudo_pass:
-                incorrect_password = gettext.dgettext(
-                    "sudo", "Sorry, try again.")
-                if stdout.endswith("%s\r\n%s" % (incorrect_password, prompt)):
-                    raise errors.AnsibleError('Incorrect sudo password') 
+            # fail early if the become password is wrong
+            if self.runner.become and sudoable:
+                if self.runner.become_pass:
+                    incorrect_password = gettext.dgettext(
+                        "Privilege Escalation", "Sorry, try again.")
+                    if stdout.endswith("%s\r\n%s" % (incorrect_password,
+                                                     prompt)):
+                        raise errors.AnsibleError('Incorrect become password')
+
+                if prompt:
+                    if stdout.endswith(prompt):
+                        raise errors.AnsibleError('Missing become password')
+                    elif stdout.endswith("%s\r\n%s" % (incorrect_password, prompt)):
+                        raise errors.AnsibleError('Incorrect becom password')
 
             if p.stdout in rfd:
                 dat = os.read(p.stdout.fileno(), 9000)
@@ -237,25 +186,220 @@ class Connection(object):
                 stderr += dat
                 if dat == '':
                     rpipes.remove(p.stderr)
-            # only break out if we've emptied the pipes, or there is nothing to
-            # read from and the process has finished.
+            # only break out if no pipes are left to read or
+            # the pipes are completely read and
+            # the process is terminated
             if (not rpipes or not rfd) and p.poll() is not None:
                 break
-            # Calling wait while there are still pipes to read can cause a lock
+            # No pipes are left to read but process is not yet terminated
+            # Only then it is safe to wait for the process to be finished
+            # NOTE: Actually p.poll() is always None here if rpipes is empty
             elif not rpipes and p.poll() == None:
                 p.wait()
-        stdin.close() # close stdin after we read from stdout (see also issue #848)
+                # The process is terminated. Since no pipes to read from are
+                # left, there is no need to call select() again.
+                break
+        # close stdin after process is terminated and stdout/stderr are read
+        # completely (see also issue #848)
+        stdin.close()
+        return (p.returncode, stdout, stderr)
+
+    def not_in_host_file(self, host):
+        if 'USER' in os.environ:
+            user_host_file = os.path.expandvars("~${USER}/.ssh/known_hosts")
+        else:
+            user_host_file = "~/.ssh/known_hosts"
+        user_host_file = os.path.expanduser(user_host_file)
         
+        host_file_list = []
+        host_file_list.append(user_host_file)
+        host_file_list.append("/etc/ssh/ssh_known_hosts")
+        host_file_list.append("/etc/ssh/ssh_known_hosts2")
+        
+        hfiles_not_found = 0
+        for hf in host_file_list:
+            if not os.path.exists(hf):
+                hfiles_not_found += 1
+                continue
+            try:
+                host_fh = open(hf)
+            except IOError, e:
+                hfiles_not_found += 1
+                continue
+            else:
+                data = host_fh.read()
+                host_fh.close()
+                
+            for line in data.split("\n"):
+                line = line.strip()
+                if line is None or " " not in line:
+                    continue
+                tokens = line.split()
+                if not tokens:
+                    continue
+                if tokens[0].find(self.HASHED_KEY_MAGIC) == 0:
+                    # this is a hashed known host entry
+                    try:
+                        (kn_salt,kn_host) = tokens[0][len(self.HASHED_KEY_MAGIC):].split("|",2)
+                        hash = hmac.new(kn_salt.decode('base64'), digestmod=sha1)
+                        hash.update(host)
+                        if hash.digest() == kn_host.decode('base64'):
+                            return False
+                    except:
+                        # invalid hashed host key, skip it
+                        continue
+                else:
+                    # standard host file entry
+                    if host in tokens[0]:
+                        return False
+
+        if (hfiles_not_found == len(host_file_list)):
+            vvv("EXEC previous known host file not found for %s" % host)
+        return True
+
+    def exec_command(self, cmd, tmp_path, become_user=None, sudoable=False, executable='/bin/sh', in_data=None):
+        ''' run a command on the remote host '''
+
+        if sudoable and self.runner.become and self.runner.become_method not in self.become_methods_supported:
+            raise errors.AnsibleError("Internal Error: this module does not support running commands via %s" % self.runner.become_method)
+
+        ssh_cmd = self._password_cmd()
+        ssh_cmd += ["ssh", "-C"]
+        if not in_data:
+            # we can only use tty when we are not pipelining the modules. piping data into /usr/bin/python
+            # inside a tty automatically invokes the python interactive-mode but the modules are not
+            # compatible with the interactive-mode ("unexpected indent" mainly because of empty lines)
+            ssh_cmd += ["-tt"]
+        if utils.VERBOSITY > 3:
+            ssh_cmd += ["-vvv"]
+        else:
+            ssh_cmd += ["-v"]
+        ssh_cmd += self.common_args
+
+        if self.ipv6:
+            ssh_cmd += ['-6']
+        ssh_cmd += [self.host]
+
+        if self.runner.become and sudoable:
+            becomecmd, prompt, success_key = utils.make_become_cmd(cmd, become_user, executable, self.runner.become_method, '', self.runner.become_exe)
+            ssh_cmd.append(becomecmd)
+        else:
+            prompt = None
+            if executable:
+                ssh_cmd.append(executable + ' -c ' + pipes.quote(cmd))
+            else:
+                ssh_cmd.append(cmd)
+
+        vvv("EXEC %s" % ' '.join(ssh_cmd), host=self.host)
+
+        not_in_host_file = self.not_in_host_file(self.host)
+
+        if C.HOST_KEY_CHECKING and not_in_host_file:
+            # lock around the initial SSH connectivity so the user prompt about whether to add
+            # the host to known hosts is not intermingled with multiprocess output.
+            fcntl.lockf(self.runner.process_lockfile, fcntl.LOCK_EX)
+            fcntl.lockf(self.runner.output_lockfile, fcntl.LOCK_EX)
+
+        # create process
+        (p, stdin) = self._run(ssh_cmd, in_data)
+
+        self._send_password()
+
+        no_prompt_out = ''
+        no_prompt_err = ''
+        if self.runner.become and sudoable and self.runner.become_pass:
+            # several cases are handled for escalated privileges with password
+            # * NOPASSWD (tty & no-tty): detect success_key on stdout
+            # * without NOPASSWD:
+            #   * detect prompt on stdout (tty)
+            #   * detect prompt on stderr (no-tty)
+            fcntl.fcntl(p.stdout, fcntl.F_SETFL,
+                        fcntl.fcntl(p.stdout, fcntl.F_GETFL) | os.O_NONBLOCK)
+            fcntl.fcntl(p.stderr, fcntl.F_SETFL,
+                        fcntl.fcntl(p.stderr, fcntl.F_GETFL) | os.O_NONBLOCK)
+            become_output = ''
+            become_errput = ''
+
+            while success_key not in become_output:
+
+                if prompt and become_output.endswith(prompt):
+                    break
+                if utils.su_prompts.check_su_prompt(become_output):
+                    break
+
+                rfd, wfd, efd = select.select([p.stdout, p.stderr], [],
+                                              [p.stdout], self.runner.timeout)
+                if p.stderr in rfd:
+                    chunk = p.stderr.read()
+                    if not chunk:
+                        raise errors.AnsibleError('ssh connection closed waiting for a privilege escalation password prompt')
+                    become_errput += chunk
+                    incorrect_password = gettext.dgettext(
+                        "become", "Sorry, try again.")
+                    if become_errput.strip().endswith("%s%s" % (prompt, incorrect_password)):
+                        raise errors.AnsibleError('Incorrect become password')
+                    elif prompt and become_errput.endswith(prompt):
+                        stdin.write(self.runner.become_pass + '\n')
+
+                if p.stdout in rfd:
+                    chunk = p.stdout.read()
+                    if not chunk:
+                        raise errors.AnsibleError('ssh connection closed waiting for %s password prompt' % self.runner.become_method)
+                    become_output += chunk
+
+                if not rfd:
+                    # timeout. wrap up process communication
+                    stdout = p.communicate()
+                    raise errors.AnsibleError('ssh connection error while waiting for %s password prompt' % self.runner.become_method)
+
+            if success_key not in become_output:
+                if sudoable:
+                    stdin.write(self.runner.become_pass + '\n')
+            else:
+                no_prompt_out += become_output
+                no_prompt_err += become_errput
+
+        (returncode, stdout, stderr) = self._communicate(p, stdin, in_data, sudoable=sudoable, prompt=prompt)
+
         if C.HOST_KEY_CHECKING and not_in_host_file:
             # lock around the initial SSH connectivity so the user prompt about whether to add 
             # the host to known hosts is not intermingled with multiprocess output.
             fcntl.lockf(self.runner.output_lockfile, fcntl.LOCK_UN)
             fcntl.lockf(self.runner.process_lockfile, fcntl.LOCK_UN)
-        controlpersisterror = stderr.find('Bad configuration option: ControlPersist') != -1 or stderr.find('unknown configuration option: ControlPersist') != -1
-        if p.returncode != 0 and controlpersisterror:
-            raise errors.AnsibleError('using -c ssh on certain older ssh versions may not support ControlPersist, set ANSIBLE_SSH_ARGS="" (or ansible_ssh_args in the config file) before running again')
+        controlpersisterror = 'Bad configuration option: ControlPersist' in stderr or \
+                              'unknown configuration option: ControlPersist' in stderr
 
-        return (p.returncode, '', stdout, stderr)
+        if C.HOST_KEY_CHECKING:
+            if ssh_cmd[0] == "sshpass" and p.returncode == 6:
+                raise errors.AnsibleError('Using a SSH password instead of a key is not possible because Host Key checking is enabled and sshpass does not support this.  Please add this host\'s fingerprint to your known_hosts file to manage this host.')
+
+        if p.returncode != 0 and controlpersisterror:
+            raise errors.AnsibleError('using -c ssh on certain older ssh versions may not support ControlPersist, set ANSIBLE_SSH_ARGS="" (or ssh_args in [ssh_connection] section of the config file) before running again')
+        if p.returncode == 255 and (in_data or self.runner.module_name == 'raw'):
+            raise errors.AnsibleError('SSH Error: data could not be sent to the remote host. Make sure this host can be reached over ssh')
+        if p.returncode == 255:
+            ip = None
+            port = None
+            for line in stderr.splitlines():
+                match = re.search(
+                    'Connecting to .*\[(\d+\.\d+\.\d+\.\d+)\] port (\d+)',
+                    line)
+                if match:
+                    ip = match.group(1)
+                    port = match.group(2)
+            if 'UNPROTECTED PRIVATE KEY FILE' in stderr:
+                lines = [line for line in stderr.splitlines()
+                         if 'ignore key:' in line]
+            else:
+                lines = stderr.splitlines()[-1:]
+            if ip and port:
+                lines.append('    while connecting to %s:%s' % (ip, port))
+            lines.append(
+                'It is sometimes useful to re-run the command using -vvvv, '
+                'which prints SSH debug output to help diagnose the issue.')
+            raise errors.AnsibleError('SSH Error: %s' % '\n'.join(lines))
+
+        return (p.returncode, '', no_prompt_out + stdout, no_prompt_err + stderr)
 
     def put_file(self, in_path, out_path):
         ''' transfer a file from local to remote '''
@@ -276,12 +420,13 @@ class Connection(object):
             cmd += ["sftp"] + self.common_args + [host]
             indata = "put %s %s\n" % (pipes.quote(in_path), pipes.quote(out_path))
 
-        p = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        self._send_password()
-        stdout, stderr = p.communicate(indata)
+        (p, stdin) = self._run(cmd, indata)
 
-        if p.returncode != 0:
+        self._send_password()
+
+        (returncode, stdout, stderr) = self._communicate(p, stdin, indata)
+
+        if returncode != 0:
             raise errors.AnsibleError("failed to transfer file to %s:\n%s\n%s" % (out_path, stdout, stderr))
 
     def fetch_file(self, in_path, out_path):

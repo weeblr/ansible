@@ -1,4 +1,4 @@
-# (c) 2012, Michael DeHaan <michael.dehaan@gmail.com>
+# (c) 2012-2014, Michael DeHaan <michael.dehaan@gmail.com>
 #
 # This file is part of Ansible
 #
@@ -17,12 +17,7 @@
 
 class AnsibleError(Exception):
     ''' The base Ansible exception from which all others should subclass '''
-
-    def __init__(self, msg):
-        self.msg = msg
-
-    def __str__(self):
-        return self.msg
+    pass
 
 class AnsibleFileNotFound(AnsibleError):
     pass

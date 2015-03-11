@@ -54,7 +54,8 @@ environment variable.
 *-e* 'VARS', *--extra-vars=*'VARS'::
 
 Extra variables to inject into a playbook, in key=value key=value format or
-as quoted JSON (hashes and arrays).
+as quoted JSON (hashes and arrays). To load variables from a file, specify
+the file preceded by @ (e.g. @vars.yml).
 
 *-f* 'NUM', *--forks=*'NUM'::
 
@@ -76,9 +77,13 @@ access, if any.
 
 Desired sudo user (default=root).
 
-*--tags*::
+*-t*, 'TAGS', *--tags=*'TAGS'::
 
-Run only these tags from the playbook
+Only run plays and tasks tagged with these values.
+
+*--skip-tags=*'SKIP_TAGS'::
+
+Only run plays and tasks whose tags do not match these values.
 
 *--syntax-check*::
 
@@ -119,11 +124,14 @@ and 'local'.  'local' is mostly useful for crontab or kickstarts.
 
 Further limits the selected host/group patterns.
 
+*--list-hosts*::
+
+Outputs a list of matching hosts; does not execute anything else.
 
 ENVIRONMENT
 -----------
 
-The following environment variables may specified.
+The following environment variables may be specified.
 
 ANSIBLE_HOSTS  -- Override the default ansible hosts file
 
@@ -160,5 +168,6 @@ SEE ALSO
 
 *ansible*(1), *ansible-pull*(1), *ansible-doc*(1)
 
-Extensive documentation as well as IRC and mailing list info
-is available on the ansible home page: <https://ansible.github.com/>
+Extensive documentation is available in the documentation site:
+<http://docs.ansible.com>. IRC and mailing list info can be found
+in file CONTRIBUTING.md, available in: <https://github.com/ansible/ansible>

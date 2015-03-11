@@ -1,4 +1,4 @@
-# (C) 2012-2013, Michael DeHaan, <michael.dehaan@gmail.com>
+# (C) 2012-2014, Michael DeHaan, <michael.dehaan@gmail.com>
 
 # This file is part of Ansible
 #
@@ -39,9 +39,6 @@ class CallbackModule(object):
         pass
 
     def runner_on_ok(self, host, res):
-        pass
-
-    def runner_on_error(self, host, msg):
         pass
 
     def runner_on_skipped(self, host, item=None):
@@ -89,7 +86,7 @@ class CallbackModule(object):
     def playbook_on_not_import_for_host(self, host, missing_file):
         pass
 
-    def playbook_on_play_start(self, pattern):
+    def playbook_on_play_start(self, name):
         pass
 
     def playbook_on_stats(self, stats):

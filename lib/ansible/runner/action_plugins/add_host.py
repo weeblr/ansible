@@ -29,7 +29,7 @@ class ActionModule(object):
 
     ### We need to be able to modify the inventory
     BYPASS_HOST_LOOP = True
-    NEEDS_TMPPATH = False
+    TRANSFERS_FILES = False
 
     def __init__(self, runner):
         self.runner = runner
@@ -77,12 +77,13 @@ class ActionModule(object):
         
         groupnames = args.get('groupname', args.get('groups', args.get('group', ''))) 
         # add it to the group if that was specified
-        if groupnames != '':
+        if groupnames:
             for group_name in groupnames.split(","):
                 group_name = group_name.strip()
                 if not inventory.get_group(group_name):
                     new_group = Group(group_name)
                     inventory.add_group(new_group)
+                    new_group.vars = inventory.get_group_variables(group_name, vault_password=inventory._vault_password)
                 grp = inventory.get_group(group_name)
                 grp.add_host(new_host)
 

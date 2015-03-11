@@ -24,10 +24,11 @@ from ansible.runner.return_data import ReturnData
 class ActionModule(object):
     ''' Print statements during execution '''
 
-    NEEDS_TMPPATH = False
+    TRANSFERS_FILES = False
 
     def __init__(self, runner):
         self.runner = runner
+        self.basedir = runner.basedir
 
     def run(self, conn, tmp, module_name, module_args, inject, complex_args=None, **kwargs):
         args = {}
@@ -49,9 +50,9 @@ class ActionModule(object):
                 result = dict(failed=True, msg=args['msg'])
             else:
                 result = dict(msg=args['msg'])
-        elif 'var' in args:
-            results = template.template(None, "{{ %s }}" % args['var'], inject)
-            result[args['var']] = results
+        elif 'var' in args and not utils.LOOKUP_REGEX.search(args['var']):
+            results = template.template(self.basedir, args['var'], inject, convert_bare=True)
+            result['var'] = { args['var']: results }
 
         # force flag to make debug output module always verbose
         result['verbose_always'] = True
